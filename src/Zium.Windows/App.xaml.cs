@@ -49,8 +49,6 @@ public partial class App : Application
         SetBrush("DividerBrush", light ? "#DCE2EA" : "#414956", SystemColors.WindowTextBrush);
         SetBrush("HoverBrush", light ? "#E8EDF6" : "#303845", SystemColors.ControlBrush);
         SetBrush("AccentBrush", light ? "#315FCB" : "#9EBFFF", SystemColors.HotTrackBrush);
-        SetBrush("BookmarkBrush", light ? "#254C9E" : "#314B7C", SystemColors.HighlightBrush);
-        SetBrush("BookmarkTextBrush", "#FFFFFF", SystemColors.HighlightTextBrush);
     }
 
     private void SetBrush(string key, string hex, Brush highContrast)

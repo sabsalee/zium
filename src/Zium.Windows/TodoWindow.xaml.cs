@@ -25,7 +25,9 @@ public partial class TodoWindow : Window
     private readonly DragVelocity velocity = new();
     private readonly DispatcherTimer animation = new(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(15) };
     private readonly Stopwatch animationClock = new();
+    private readonly RectangleGeometry frameClip = new();
     private DockPosition dock;
+    private ScreenSize preferredSize;
     private Forms.NotifyIcon? tray;
     private HwndSource? windowSource;
     private Window? bookmark;
@@ -44,6 +46,7 @@ public partial class TodoWindow : Window
         foreach (var item in state.Items)
             rows.Add(new(item));
         dock = state.Position;
+        preferredSize = state.WindowSize ?? Docking.DefaultWindowSize;
         Topmost = state.Pinned;
         TaskList.ItemsSource = rows;
         UpdateCount();
@@ -55,11 +58,13 @@ public partial class TodoWindow : Window
 
         animation.Tick += AnimateTick;
         PreviewKeyDown += WindowKeyDown;
+        Activated += (_, _) => RefreshQuickEntry();
+        Deactivated += (_, _) => RefreshQuickEntry();
         Closing += WindowClosing;
         Closed += WindowClosed;
         DpiChanged += (_, _) => Dispatcher.InvokeAsync(() =>
         {
-            if (ready && !animation.IsEnabled && !DragHandle.IsMouseCaptured && IsVisible)
+            if (ready && !animation.IsEnabled && !DragHandle.IsMouseCaptured && !resizing && IsVisible)
                 Reposition();
         }, DispatcherPriority.Loaded);
     }
@@ -112,20 +117,24 @@ public partial class TodoWindow : Window
         return IntPtr.Zero;
     }
 
-    private void DisplaysChanged(object? sender, EventArgs e) => Dispatcher.InvokeAsync(Reposition);
+    private void DisplaysChanged(object? sender, EventArgs e) => Dispatcher.InvokeAsync(() =>
+    {
+        if (!DragHandle.IsMouseCaptured) Reposition();
+    });
 
     private void Reposition()
     {
-        if (quitting) return;
+        if (quitting || resizing) return;
         StopAnimation();
         var display = Display();
         var work = GetWorkArea(display);
         dock = dock with { Display = display.DeviceName };
+        UpdateResizeMark();
         if (dock.Hidden)
         {
             Hide();
-            var (size, scale) = PrepareOnDisplay(display, work);
-            ShowBookmark(work, size, scale);
+            var (_, scale) = PrepareOnDisplay(display, work);
+            ShowBookmark(work, scale, initialOpacity: 1);
             return;
         }
         CloseBookmark();
@@ -144,8 +153,14 @@ public partial class TodoWindow : Window
                 work.Top + (work.Bottom - work.Top) / 3));
         }
         var scale = NativeWindow.Scale(handle);
-        Width = Math.Min(322, Math.Max(1, (work.Right - work.Left) / scale - 2 * Docking.Margin));
-        Height = Math.Min(345, Math.Max(1, (work.Bottom - work.Top) / scale - 2 * Docking.Margin));
+        var maximum = Docking.MaximumWindowSize(work, scale);
+        MinWidth = Math.Min(Docking.MinimumWindowSize.Width, maximum.Width);
+        MinHeight = Math.Min(Docking.MinimumWindowSize.Height, maximum.Height);
+        MaxWidth = maximum.Width;
+        MaxHeight = maximum.Height;
+        var size = Docking.ClampWindowSize(preferredSize, maximum);
+        Width = size.Width;
+        Height = size.Height;
         UpdateLayout();
         return (new(Width * scale, Height * scale), scale);
     }
@@ -154,7 +169,13 @@ public partial class TodoWindow : Window
     {
         if (e.ChangedButton != MouseButton.Left) return;
         StopAnimation();
-        PanelFrame.Clip = null;
+        WindowSurface.Clip = null;
+        if (dock.Hidden)
+        {
+            dock = dock with { Hidden = false };
+            CloseBookmark();
+            SaveChange();
+        }
         dragPointer = NativeWindow.Cursor();
         dragOrigin = NativeWindow.Bounds(handle).Origin;
         velocity.Start(dragPointer, Environment.TickCount64);
@@ -214,17 +235,21 @@ public partial class TodoWindow : Window
         var (start, size) = NativeWindow.Bounds(handle);
         var scale = NativeWindow.Scale(handle);
         var target = Docking.PanelOrigin(work, size, dock, scale);
-        StartAnimation(start, target, position.Hidden ? 190 : 240, position.Hidden ? work : null, () =>
+        UpdateResizeMark();
+        if (position.Hidden)
         {
-            if (position.Hidden)
+            var initialOpacity = bookmark?.Opacity ?? 0;
+            ShowBookmark(work, scale, initialOpacity);
+            StartAnimation(start, target, 260, work, () =>
             {
                 Hide();
-                PanelFrame.Clip = null;
-                ShowBookmark(work, size, scale);
-            }
-            else
-                Reposition();
-        });
+                WindowSurface.Clip = null;
+            }, phase => SetBookmarkOpacity(initialOpacity + (1 - initialOpacity) * SmoothStep((phase - .3) / .62)),
+                easeInOut: true);
+            return;
+        }
+        CloseBookmark();
+        StartAnimation(start, target, 255, null, Reposition);
     }
 
     private void Tuck()
@@ -246,29 +271,41 @@ public partial class TodoWindow : Window
         StopAnimation();
         var display = Display();
         var work = GetWorkArea(display);
-        var (panel, scale) = PrepareOnDisplay(display, work);
-        var start = Docking.PanelOrigin(work, panel, dock, scale);
+        ScreenPoint start;
+        ScreenSize panel;
+        double scale;
+        if (IsVisible)
+        {
+            (start, panel) = NativeWindow.Bounds(handle);
+            scale = NativeWindow.Scale(handle);
+        }
+        else
+        {
+            (panel, scale) = PrepareOnDisplay(display, work);
+            start = Docking.PanelOrigin(work, panel, dock, scale);
+        }
         dock = dock with { Hidden = false, Display = display.DeviceName };
         SaveChange();
         var target = Docking.PanelOrigin(work, panel, dock, scale);
         if (!IsVisible) ShowAt(start, work);
         else PlaceFrame(start, work);
-        CloseBookmark();
-        StartAnimation(start, target, 220, work, () =>
+        var initialOpacity = bookmark?.Opacity ?? 0;
+        StartAnimation(start, target, 275, work, () =>
         {
             Reposition();
             if (focusEntry) FocusEntry();
-        });
+        }, phase => SetBookmarkOpacity(initialOpacity * (1 - SmoothStep(phase / .68))));
     }
 
     private void FocusEntry()
     {
         Activate();
+        RefreshQuickEntry();
         if (editing is null) NewTitle.Focus();
         else EditTitle.Focus();
     }
 
-    private void ShowBookmark(WorkArea work, ScreenSize size, double scale)
+    private void ShowBookmark(WorkArea work, double scale, double initialOpacity)
     {
         CloseBookmark();
         var isLeft = dock.Side == DockSide.Left;
@@ -279,31 +316,46 @@ public partial class TodoWindow : Window
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
         };
-        arrow.SetResourceReference(Shape.StrokeProperty, "BookmarkTextBrush");
+        arrow.SetResourceReference(Shape.StrokeProperty, "MutedBrush");
         var button = new Button { Content = arrow, ToolTip = "Zium 할 일 펼치기",
             Style = (Style)FindResource("BookmarkButton") };
         System.Windows.Automation.AutomationProperties.SetName(button, "Zium 할 일 펼치기");
         button.Click += (_, _) => Reveal(focusEntry: true);
+        var radius = isLeft ? new CornerRadius(0, 10, 10, 0) : new CornerRadius(10, 0, 0, 10);
+        var margin = isLeft ? new Thickness(0, Docking.ShadowInset, Docking.ShadowInset, Docking.ShadowInset)
+            : new Thickness(Docking.ShadowInset, Docking.ShadowInset, 0, Docking.ShadowInset);
         var shape = new Border
         {
-            CornerRadius = isLeft ? new CornerRadius(0, 10, 10, 0) : new CornerRadius(10, 0, 0, 10),
-            Child = button
+            CornerRadius = radius, Margin = margin, Child = button,
+            BorderThickness = isLeft ? new Thickness(0, 1, 1, 1) : new Thickness(1, 1, 0, 1)
         };
-        shape.SetResourceReference(Border.BackgroundProperty, "BookmarkBrush");
+        shape.SetResourceReference(Border.BackgroundProperty, "PanelBrush");
+        shape.SetResourceReference(Border.BorderBrushProperty, "DividerBrush");
+        var shade = new Border
+        {
+            Margin = margin, CornerRadius = radius, IsHitTestVisible = false,
+            Effect = new System.Windows.Media.Effects.DropShadowEffect
+            {
+                Color = Color.FromRgb(24, 33, 49), BlurRadius = 15, ShadowDepth = 2, Opacity = .38
+            }
+        };
+        shade.SetResourceReference(Border.BackgroundProperty, "PanelBrush");
+        var tile = new Grid { Children = { shade, shape } };
         bookmark = new Window
         {
-            Width = Docking.BookmarkWidth, Height = Docking.BookmarkHeight, WindowStyle = WindowStyle.None,
+            Width = Docking.BookmarkWidth + Docking.ShadowInset, Height = Docking.BookmarkHeight + 2 * Docking.ShadowInset,
+            WindowStyle = WindowStyle.None,
             ResizeMode = ResizeMode.NoResize, AllowsTransparency = true, Background = Brushes.Transparent,
-            ShowInTaskbar = false, ShowActivated = false, Topmost = true, Title = "Zium 책갈피", Content = shape,
+            ShowInTaskbar = false, ShowActivated = false, Topmost = true, Title = "Zium 책갈피", Content = tile,
             Opacity = 0
         };
         var tabHandle = new WindowInteropHelper(bookmark).EnsureHandle();
-        var target = Docking.BookmarkOrigin(work, size, dock, scale);
+        var target = Docking.BookmarkOrigin(work, new(bookmark.Width * scale, bookmark.Height * scale), dock, scale);
         NativeWindow.Move(tabHandle, target);
         bookmark.Show();
         var (_, tabSize) = NativeWindow.Bounds(tabHandle);
-        NativeWindow.Move(tabHandle, new(isLeft ? work.Left : work.Right - tabSize.Width, target.Y));
-        bookmark.Opacity = 1;
+        NativeWindow.Move(tabHandle, Docking.BookmarkOrigin(work, tabSize, dock, NativeWindow.Scale(tabHandle)));
+        bookmark.Opacity = initialOpacity;
     }
 
     private void CloseBookmark()
@@ -312,19 +364,34 @@ public partial class TodoWindow : Window
         bookmark = null;
     }
 
-    private void StartAnimation(ScreenPoint start, ScreenPoint target, int milliseconds, WorkArea? clip, Action done)
+    private void SetBookmarkOpacity(double opacity)
+    {
+        if (bookmark is not null) bookmark.Opacity = opacity;
+    }
+
+    private static double SmoothStep(double phase)
+    {
+        phase = Math.Clamp(phase, 0, 1);
+        return phase * phase * (3 - 2 * phase);
+    }
+
+    private void StartAnimation(ScreenPoint start, ScreenPoint target, int milliseconds, WorkArea? clip, Action done,
+        Action<double>? draw = null, bool easeInOut = false)
     {
         StopAnimation();
         if (!SystemParameters.ClientAreaAnimation || start == target)
         {
             PlaceFrame(target, clip);
+            draw?.Invoke(1);
             done();
             return;
         }
         animatedFrame = elapsed =>
         {
-            var progress = 1 - Math.Pow(1 - Math.Min(elapsed / milliseconds, 1), 3);
+            var phase = Math.Min(elapsed / milliseconds, 1);
+            var progress = easeInOut ? SmoothStep(phase) : 1 - Math.Pow(1 - phase, 3);
             PlaceFrame(new(start.X + (target.X - start.X) * progress, start.Y + (target.Y - start.Y) * progress), clip);
+            draw?.Invoke(phase);
             if (elapsed < milliseconds) return;
             var finish = animationDone;
             StopAnimation();
@@ -359,7 +426,7 @@ public partial class TodoWindow : Window
         NativeWindow.Move(handle, point);
         if (clip is not WorkArea work)
         {
-            PanelFrame.Clip = null;
+            WindowSurface.Clip = null;
             return;
         }
         var (origin, size) = NativeWindow.Bounds(handle);
@@ -368,7 +435,8 @@ public partial class TodoWindow : Window
         var top = Math.Clamp((work.Top - origin.Y) / scale, 0, size.Height / scale);
         var right = Math.Clamp((work.Right - origin.X) / scale, left, size.Width / scale);
         var bottom = Math.Clamp((work.Bottom - origin.Y) / scale, top, size.Height / scale);
-        PanelFrame.Clip = new RectangleGeometry(new Rect(left, top, right - left, bottom - top));
+        frameClip.Rect = new Rect(left, top, right - left, bottom - top);
+        if (WindowSurface.Clip != frameClip) WindowSurface.Clip = frameClip;
     }
 
     private Forms.Screen Display()
@@ -416,17 +484,23 @@ public partial class TodoWindow : Window
     private void TaskHeaderClicked(object sender, RoutedEventArgs e)
     {
         if (sender is not Button { Tag: TodoRow row }) return;
-        if (row.HasNote) row.Update(row.Item, !row.IsExpanded);
-        else Edit(row);
+        if (editing is not null || !row.HasNote) Edit(row);
+        else row.Update(row.Item, !row.IsExpanded);
     }
 
-    private static TodoRow? MenuRow(object sender) =>
-        (sender as MenuItem)?.Parent is ContextMenu { PlacementTarget: FrameworkElement { DataContext: TodoRow row } }
-            ? row : null;
+    private static TodoRow? MenuRow(object sender) => (sender as MenuItem)?.DataContext as TodoRow;
 
     private void EditMenuClicked(object sender, RoutedEventArgs e)
     {
         if (MenuRow(sender) is { } row) Edit(row);
+    }
+
+    private void NoteEditClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: TodoRow row }) return;
+        Edit(row);
+        EditNote.Focus();
+        EditNote.CaretIndex = EditNote.Text.Length;
     }
 
     private void DeleteMenuClicked(object sender, RoutedEventArgs e)
@@ -440,15 +514,16 @@ public partial class TodoWindow : Window
 
     private void Edit(TodoRow row)
     {
-        if (editing is not null)
+        if (editing == row)
         {
             EditTitle.Focus();
             return;
         }
+        if (editing is not null && ApplyDraft(editing)) SaveChange();
         editing = row;
         EditTitle.Text = row.Title;
         EditNote.Text = row.Note;
-        QuickEntry.Visibility = Visibility.Collapsed;
+        RefreshQuickEntry();
         EditFields.Visibility = Visibility.Visible;
         EditTitle.Focus();
         EditTitle.SelectAll();
@@ -459,24 +534,35 @@ public partial class TodoWindow : Window
 
     private void SaveEdit()
     {
-        var title = EditTitle.Text.Trim();
-        if (editing is null || title.Length == 0)
+        if (editing is null || string.IsNullOrWhiteSpace(EditTitle.Text))
         {
             EditTitle.Focus();
             return;
         }
-        editing.Update(editing.Item with { Title = title, Note = EditNote.Text.Trim() }, true);
+        var changed = ApplyDraft(editing);
         EndEdit();
-        SaveChange();
+        if (changed) SaveChange();
+    }
+
+    private bool ApplyDraft(TodoRow row)
+    {
+        var title = EditTitle.Text.Trim();
+        var updated = row.Item with { Title = title.Length == 0 ? row.Title : title, Note = EditNote.Text.Trim() };
+        if (updated == row.Item) return false;
+        row.Update(updated, true);
+        return true;
     }
 
     private void EndEdit()
     {
         editing = null;
         EditFields.Visibility = Visibility.Collapsed;
-        QuickEntry.Visibility = Visibility.Visible;
-        NewTitle.Focus();
+        RefreshQuickEntry();
+        if (IsActive) NewTitle.Focus();
     }
+
+    private void RefreshQuickEntry() =>
+        QuickEntry.Visibility = IsActive && editing is null ? Visibility.Visible : Visibility.Collapsed;
 
     private void WindowKeyDown(object sender, KeyEventArgs e)
     {
@@ -525,7 +611,7 @@ public partial class TodoWindow : Window
         dirty = true;
         try
         {
-            store.Save(new(rows.Select(row => row.Item).ToList(), dock, Topmost));
+            store.Save(new(rows.Select(row => row.Item).ToList(), dock, Topmost, preferredSize));
             if (Notice.Text.StartsWith("할 일을 저장하지 못했어요."))
                 ShowNotice("");
             dirty = false;

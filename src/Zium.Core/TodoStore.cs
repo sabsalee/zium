@@ -4,7 +4,7 @@ namespace Zium.Core;
 
 public sealed record TodoItem(Guid Id, string Title, string Note, DateTimeOffset? CompletedAt);
 
-public sealed record TodoState(List<TodoItem> Items, DockPosition Position, bool Pinned)
+public sealed record TodoState(List<TodoItem> Items, DockPosition Position, bool Pinned, ScreenSize? WindowSize = null)
 {
     public static TodoState Empty => new([], DockPosition.Default, true);
 }
@@ -65,8 +65,12 @@ public sealed class TodoStore(string file)
                 var position = saved.Position;
                 if (!Enum.IsDefined(position.Side) || !double.IsFinite(position.Vertical))
                     position = DockPosition.Default;
+                var size = saved.WindowSize;
+                if (size is { } value && (!double.IsFinite(value.Width) || !double.IsFinite(value.Height) ||
+                    value.Width <= 0 || value.Height <= 0))
+                    size = null;
                 var normalized = saved.Items.Select(item => item with { Note = item.Note ?? "" }).ToList();
-                state = saved with { Items = normalized, Position = position };
+                state = saved with { Items = normalized, Position = position, WindowSize = size };
                 return true;
             }
         }

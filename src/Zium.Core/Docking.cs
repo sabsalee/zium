@@ -13,8 +13,12 @@ public readonly record struct DockPosition(string Display, DockSide Side, double
 public static class Docking
 {
     public const double Margin = 16;
-    public const double BookmarkWidth = 28;
-    public const double BookmarkHeight = 56;
+    public const double ShadowInset = 12;
+    public const double FrameGap = Margin - ShadowInset;
+    public const double BookmarkWidth = 27;
+    public const double BookmarkHeight = 86;
+    public static ScreenSize DefaultWindowSize => new(346, 369);
+    public static ScreenSize MinimumWindowSize => new(270, 225);
 
     private const double ThrowSpeed = 550;
     private const double HideSpeed = 1050;
@@ -27,15 +31,16 @@ public static class Docking
     {
         var center = (work.Left + work.Right) / 2;
         var horizontal = Math.Abs(velocity.X) >= Math.Abs(velocity.Y) * DirectionRatio;
-        var thrown = horizontal && Math.Abs(velocity.X) >= ThrowSpeed * scale;
-        var side = thrown
+        var side = Math.Abs(velocity.X) >= ThrowSpeed * scale
             ? (velocity.X < 0 ? DockSide.Left : DockSide.Right)
             : (origin.X + panel.Width / 2 <= center ? DockSide.Left : DockSide.Right);
         var distance = side == DockSide.Left ? pointer.X - work.Left : work.Right - pointer.X;
-        var hidden = thrown && Math.Abs(velocity.X) >= HideSpeed * scale && distance <= HideZone * scale;
-        var projectedY = origin.Y + Math.Clamp(velocity.Y * ProjectionSeconds, -120 * scale, 120 * scale);
-        var (top, bottom) = VerticalRange(work, panel.Height, scale);
-        var vertical = bottom == top ? 0 : Math.Clamp((projectedY - top) / (bottom - top), 0, 1);
+        var hidden = horizontal && Math.Abs(velocity.X) >= HideSpeed * scale && distance <= HideZone * scale;
+        var projectedY = origin.Y + panel.Height / 2 + Math.Clamp(velocity.Y * ProjectionSeconds, -120 * scale, 120 * scale);
+        var towardBottom = Math.Abs(velocity.Y) >= ThrowSpeed * scale
+            ? velocity.Y > 0
+            : projectedY > (work.Top + work.Bottom) / 2;
+        var vertical = towardBottom ? 1 : 0;
         return new(display, side, vertical, hidden);
     }
 
@@ -45,21 +50,28 @@ public static class Docking
         var (top, bottom) = VerticalRange(work, panel.Height, scale);
         var left = position.Hidden
             ? (position.Side == DockSide.Left ? edge - panel.Width : edge)
-            : (position.Side == DockSide.Left ? edge + Margin * scale : edge - panel.Width - Margin * scale);
-        return new(left, top + (bottom - top) * Math.Clamp(position.Vertical, 0, 1));
+            : (position.Side == DockSide.Left ? edge + FrameGap * scale : edge - panel.Width - FrameGap * scale);
+        return new(left, position.Vertical < .5 ? top : bottom);
     }
 
-    public static ScreenPoint BookmarkOrigin(WorkArea work, ScreenSize panel, DockPosition position, double scale)
+    public static ScreenPoint BookmarkOrigin(WorkArea work, ScreenSize bookmark, DockPosition position, double scale)
     {
-        var panelOrigin = PanelOrigin(work, panel, position, scale);
-        var (top, bottom) = VerticalRange(work, BookmarkHeight * scale, scale);
-        var left = position.Side == DockSide.Left ? work.Left : work.Right - BookmarkWidth * scale;
-        return new(left, Math.Clamp(panelOrigin.Y + (panel.Height - BookmarkHeight * scale) / 2, top, bottom));
+        var (top, bottom) = VerticalRange(work, bookmark.Height, scale);
+        var left = position.Side == DockSide.Left ? work.Left : work.Right - bookmark.Width;
+        return new(left, position.Vertical < .5 ? top : bottom);
     }
+
+    public static ScreenSize MaximumWindowSize(WorkArea work, double scale) => new(
+        Math.Max(1, (work.Right - work.Left) / scale - 2 * FrameGap),
+        Math.Max(1, (work.Bottom - work.Top) / scale - 2 * FrameGap));
+
+    public static ScreenSize ClampWindowSize(ScreenSize size, ScreenSize maximum) => new(
+        Math.Clamp(size.Width, Math.Min(MinimumWindowSize.Width, maximum.Width), maximum.Width),
+        Math.Clamp(size.Height, Math.Min(MinimumWindowSize.Height, maximum.Height), maximum.Height));
 
     private static (double Top, double Bottom) VerticalRange(WorkArea work, double height, double scale)
     {
-        var margin = Margin * scale;
+        var margin = FrameGap * scale;
         var top = work.Top + Math.Min(margin, Math.Max(0, (work.Bottom - work.Top - height) / 2));
         return (top, Math.Max(top, work.Bottom - margin - height));
     }
