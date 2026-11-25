@@ -1,0 +1,71 @@
+name: Windows installer and update
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      - name: Build and check core behavior
+        shell: pwsh
+        run: |
+          dotnet run -c Release --project tests/Zium.Core.Checks/Zium.Core.Checks.csproj
+          if ($LASTEXITCODE -ne 0) { throw 'Core checks failed.' }
+          dotnet tool restore
+          if ($LASTEXITCODE -ne 0) { throw 'Velopack tool restore failed.' }
+          ./scripts/package-windows.ps1
+      - name: Install, update, and restart
+        shell: pwsh
+        run: ./scripts/test-installed-update.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Zium-Windows-installer
+          path: artifacts/installer/
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push' && github.repository == 'sabsalee/zium'
+    needs: verify
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: Zium-Windows-installer
+          path: artifacts/installer
+      - name: Publish verified installer and update feed
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [xml]$project = Get-Content src/Zium.Windows/Zium.Windows.csproj
+          $version = [string]$project.Project.PropertyGroup.Version
+          if ($env:GITHUB_REF_NAME -ne "v$version") { throw 'The release tag must match the project version.' }
+          $assets = Get-ChildItem artifacts/installer -File | Where-Object {
+              $_.Name -in 'Zium-Setup.exe', 'releases.win-x64.json', 'SHA256SUMS' -or $_.Name -like "ZiumDesktop-$version-*-full.nupkg"
+          }
+          if ($assets.Count -ne 4) { throw 'The release must include setup, feed, full package and checksums.' }
+          $notes = Join-Path $env:RUNNER_TEMP 'zium-release-notes.md'
+          @'
+          Windows 11 x64에서 `Zium-Setup.exe`를 받아 실행하세요. ZIP 버전을 쓰고 있다면 트레이에서 종료한 뒤 설치하면 기존 항목과 메모를 이어 쓸 수 있습니다.
+
+          처음에 트레이의 **자동 업데이트 설정**에서 GitHub 읽기 토큰을 연결하세요. 설치 버전은 새 파일을 백그라운드에서 받고 다음 종료 또는 실행 때 업데이트합니다.
+          '@ | Set-Content $notes -Encoding utf8NoBOM
+          $flags = @('--repo', $env:GITHUB_REPOSITORY, '--verify-tag', '--title', "Zium v$version", '--notes-file', $notes, '--generate-notes')
+          if ($version.Contains('-')) { $flags += '--prerelease' }
+          $assetPaths = @($assets.FullName)
+          gh release create $env:GITHUB_REF_NAME @assetPaths @flags
+          if ($LASTEXITCODE -ne 0) { throw 'Release publishing failed.' }

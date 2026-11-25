@@ -19,8 +19,8 @@ namespace Zium.Windows;
 
 public partial class TodoWindow : Window
 {
-    private readonly TodoStore store = new(System.IO.Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Zium", "todo.json"));
+    private readonly TodoStore store = new(System.IO.Path.Combine(ApplicationData.Folder, "todo.json"));
+    private readonly UpdateService updates = new();
     private readonly ObservableCollection<TodoRow> rows = [];
     private readonly DragVelocity velocity = new();
     private readonly DispatcherTimer animation = new(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(15) };
@@ -29,6 +29,8 @@ public partial class TodoWindow : Window
     private DockPosition dock;
     private ScreenSize preferredSize;
     private Forms.NotifyIcon? tray;
+    private Forms.ToolStripItem? restartWithUpdate;
+    private UpdateSettings? updateSettings;
     private HwndSource? windowSource;
     private Window? bookmark;
     private TodoRow? editing;
@@ -69,7 +71,7 @@ public partial class TodoWindow : Window
         }, DispatcherPriority.Loaded);
     }
 
-    internal void Start()
+    internal void Start(bool firstInstalledRun)
     {
         var interop = new WindowInteropHelper(this);
         handle = interop.EnsureHandle();
@@ -83,6 +85,10 @@ public partial class TodoWindow : Window
         SystemEvents.DisplaySettingsChanged += DisplaysChanged;
         ready = true;
         Reposition();
+        updates.Changed += RefreshUpdateTray;
+        updates.Start();
+        if (firstInstalledRun && updates.IsInstalled && !updates.Connected)
+            Dispatcher.InvokeAsync(OpenUpdateSettings, DispatcherPriority.ApplicationIdle);
     }
 
     private void CreateTray()
@@ -98,8 +104,28 @@ public partial class TodoWindow : Window
         };
         tray.ContextMenuStrip.Items.Add("할 일 열기", null, (_, _) => Reveal(focusEntry: true));
         tray.ContextMenuStrip.Items.Add("가장자리에 접기", null, (_, _) => Tuck());
+        tray.ContextMenuStrip.Items.Add("자동 업데이트 설정…", null, (_, _) => OpenUpdateSettings());
+        restartWithUpdate = tray.ContextMenuStrip.Items.Add("업데이트하고 다시 시작", null, (_, _) => Quit(restart: true));
+        restartWithUpdate.Available = false;
         tray.ContextMenuStrip.Items.Add("종료", null, (_, _) => Quit());
         tray.MouseClick += (_, e) => { if (e.Button == Forms.MouseButtons.Left) Reveal(focusEntry: true); };
+    }
+
+    private void OpenUpdateSettings()
+    {
+        if (updateSettings is null)
+        {
+            updateSettings = new UpdateSettings(updates, () => Quit(restart: true));
+            updateSettings.Closed += (_, _) => updateSettings = null;
+            updateSettings.Show();
+        }
+        updateSettings.Activate();
+    }
+
+    private void RefreshUpdateTray()
+    {
+        if (restartWithUpdate is not null)
+            restartWithUpdate.Available = updates.CanRestart;
     }
 
     private IntPtr WindowMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -637,11 +663,18 @@ public partial class TodoWindow : Window
         Notice.Visibility = text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
     }
 
-    private void Quit()
+    private void Quit(bool restart = false)
     {
+        if (editing is not null && ApplyDraft(editing)) dirty = true;
         if (dirty && !SaveChange())
         {
             Reveal(focusEntry: false);
+            return;
+        }
+        var scheduled = updates.ScheduleOnExit(restart);
+        if (restart && !scheduled)
+        {
+            OpenUpdateSettings();
             return;
         }
         quitting = true;
@@ -658,6 +691,8 @@ public partial class TodoWindow : Window
     private void WindowClosed(object? sender, EventArgs e)
     {
         StopAnimation();
+        updates.Changed -= RefreshUpdateTray;
+        updates.Dispose();
         CloseBookmark();
         SystemEvents.DisplaySettingsChanged -= DisplaysChanged;
         if (hotkeyRegistered) NativeWindow.UnregisterToggle(handle);
