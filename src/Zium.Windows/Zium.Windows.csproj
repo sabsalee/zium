@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>Zium</AssemblyName>
+    <Version>0.1.0-preview.1</Version>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>zium.ico</ApplicationIcon>
+    <!-- WPF owns application startup. WinForms is only used for the tray and display bounds. -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Zium.Core/Zium.Core.csproj" />
+    <Resource Include="Fonts/*.ttf;zium.ico" />
+    <None Update="Fonts/OFL.txt" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
