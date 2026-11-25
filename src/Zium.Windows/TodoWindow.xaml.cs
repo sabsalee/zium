@@ -19,7 +19,8 @@ namespace Zium.Windows;
 
 public partial class TodoWindow : Window
 {
-    private readonly TodoStore store = new(System.IO.Path.Combine(ApplicationData.Folder, "todo.json"));
+    private readonly TodoStore store = new(System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Zium", "todo.json"));
     private readonly UpdateService updates = new();
     private readonly ObservableCollection<TodoRow> rows = [];
     private readonly DragVelocity velocity = new();
@@ -71,7 +72,7 @@ public partial class TodoWindow : Window
         }, DispatcherPriority.Loaded);
     }
 
-    internal void Start(bool firstInstalledRun)
+    internal void Start()
     {
         var interop = new WindowInteropHelper(this);
         handle = interop.EnsureHandle();
@@ -87,8 +88,6 @@ public partial class TodoWindow : Window
         Reposition();
         updates.Changed += RefreshUpdateTray;
         updates.Start();
-        if (firstInstalledRun && updates.IsInstalled && !updates.Connected)
-            Dispatcher.InvokeAsync(OpenUpdateSettings, DispatcherPriority.ApplicationIdle);
     }
 
     private void CreateTray()
@@ -104,7 +103,7 @@ public partial class TodoWindow : Window
         };
         tray.ContextMenuStrip.Items.Add("할 일 열기", null, (_, _) => Reveal(focusEntry: true));
         tray.ContextMenuStrip.Items.Add("가장자리에 접기", null, (_, _) => Tuck());
-        tray.ContextMenuStrip.Items.Add("자동 업데이트 설정…", null, (_, _) => OpenUpdateSettings());
+        tray.ContextMenuStrip.Items.Add("업데이트…", null, (_, _) => OpenUpdateSettings());
         restartWithUpdate = tray.ContextMenuStrip.Items.Add("업데이트하고 다시 시작", null, (_, _) => Quit(restart: true));
         restartWithUpdate.Available = false;
         tray.ContextMenuStrip.Items.Add("종료", null, (_, _) => Quit());

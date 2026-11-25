@@ -9,7 +9,6 @@ namespace Zium.Windows;
 public partial class App : Application
 {
     private Mutex? instance;
-    internal bool IsFirstInstalledRun { get; init; }
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -26,7 +25,7 @@ public partial class App : Application
         SystemEvents.UserPreferenceChanged += UserPreferenceChanged;
         var panel = new TodoWindow();
         MainWindow = panel;
-        panel.Start(IsFirstInstalledRun);
+        panel.Start();
     }
 
     protected override void OnExit(ExitEventArgs e)

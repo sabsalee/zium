@@ -23,12 +23,9 @@ Windows 11 x64에서 [GitHub 릴리스](https://github.com/sabsalee/zium/release
 
 ## 자동 업데이트
 
-비공개 GitHub 저장소를 사용하므로 설치한 Windows의 Zium 트레이에서 **자동 업데이트 설정**을 열고 다음 항목으로 읽기 토큰을 연결하세요.
+Zium은 Snaplet처럼 별도 연결 없이 공개 GitHub 릴리스를 확인합니다. 설치 버전은 앱 시작 시와 실행 중 4시간마다 새 버전을 확인해 백그라운드에서 받습니다. 다운로드된 업데이트는 앱을 종료하거나 다음에 열 때 적용됩니다. 트레이의 **업데이트…**에서 버전과 상태를 확인하거나 **업데이트하고 다시 시작**을 눌러 바로 적용할 수 있습니다.
 
-1. **GitHub에서 토큰 만들기**를 누르고 Fine-grained 토큰을 만듭니다. Resource owner는 `sabsalee`, Repository access는 **Only select repositories**의 `zium`을 선택합니다.
-2. Repository permissions의 **Contents**를 **Read-only**로 설정하고 토큰을 생성합니다. 토큰은 Zium의 입력칸에 붙여넣고 **토큰 연결**을 누릅니다.
-
-토큰은 현재 Windows 사용자 계정으로 암호화해 저장합니다. 앱 시작 시와 실행 중 4시간마다 새 버전을 확인해 백그라운드에서 받습니다. 다운로드된 업데이트는 앱을 종료하거나 다음에 열 때 적용됩니다. 바로 적용할 때는 트레이의 **업데이트하고 다시 시작**을 누릅니다. 토큰이 만료되면 새 토큰으로 연결할 수 있습니다. [GitHub의 토큰 안내](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens) · [필요한 릴리스 읽기 권한](https://docs.github.com/en/rest/releases/releases)
+`preview.3`에서 자동 업데이트 연결을 건너뛰었다면 최신 `Zium-Setup.exe`를 한 번 실행하세요. 이후 버전은 설치된 앱에서 자동으로 받습니다.
 
 ## 개발
 

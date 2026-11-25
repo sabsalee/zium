@@ -32,7 +32,7 @@ try {
         if (Test-Path $report) {
             $result = Get-Content $report -Raw | ConvertFrom-Json
             if ($result.status -ne 'passed' -or $result.version -ne $current) { throw "Installed update failed: $($result.error)" }
-            Write-Host "Installed $baseline -> $current, restarted, and read local data and the DPAPI-protected credential."
+            Write-Host "Installed $baseline -> $current, restarted, and read local tasks and notes."
             return
         }
         Start-Sleep -Milliseconds 500

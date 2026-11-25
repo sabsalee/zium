@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Text.Json;
 using System.Threading;
 using Velopack.Sources;
@@ -11,7 +10,6 @@ namespace Zium.Windows;
 
 internal static class UpdateInstallationCheck
 {
-    private const string TestToken = "zium-dpapi-probe";
     private const string TestTitle = "설치 전 할 일";
     private const string TestNote = "업데이트 뒤에도 남는 메모";
 
@@ -25,12 +23,11 @@ internal static class UpdateInstallationCheck
         try
         {
             var data = Path.GetDirectoryName(report)!;
-            var tokenPath = Path.Combine(data, "protected-token.bin");
             var store = new TodoStore(Path.Combine(data, "todo.json"));
             var update = UpdateDistribution.Create(new SimpleFileSource(new DirectoryInfo(args[1])));
             var version = update.CurrentVersion?.ToString();
             var baselineMarker = Path.Combine(AppContext.BaseDirectory, "baseline-only.marker");
-            if (!update.IsInstalled || update.IsPortable)
+            if (!update.IsInstalled || update.IsPortable || update.AppId != UpdateDistribution.PackId)
                 throw new InvalidOperationException("Zium did not start from an installer-managed directory.");
 
             if (args[0] == "--check-installed-update")
@@ -38,10 +35,6 @@ internal static class UpdateInstallationCheck
                 if (version != args[3] || !File.Exists(baselineMarker))
                     throw new InvalidOperationException("The baseline package was not installed.");
                 store.Save(TodoState.Empty with { Items = [new(Guid.NewGuid(), TestTitle, TestNote, null)] });
-                UpdateCredentials.Write(tokenPath, TestToken);
-                if (Encoding.UTF8.GetString(File.ReadAllBytes(tokenPath)).Contains(TestToken, StringComparison.Ordinal))
-                    throw new InvalidOperationException("The credential was not encrypted.");
-
                 var available = update.CheckForUpdatesAsync().WaitAsync(TimeSpan.FromSeconds(45)).GetAwaiter().GetResult();
                 if (available?.TargetFullRelease.Version.ToString() != args[4])
                     throw new InvalidOperationException("The new prerelease was not offered.");
@@ -57,8 +50,8 @@ internal static class UpdateInstallationCheck
                 if (version != args[4] || File.Exists(baselineMarker))
                     throw new InvalidOperationException("The installer did not replace the old version.");
                 var saved = store.Load().State.Items.Single();
-                if (saved.Title != TestTitle || saved.Note != TestNote || UpdateCredentials.Read(tokenPath) != TestToken)
-                    throw new InvalidOperationException("Local data or the protected credential could not be read after updating.");
+                if (saved.Title != TestTitle || saved.Note != TestNote)
+                    throw new InvalidOperationException("Local data could not be read after updating.");
                 Report(report, new { status = "passed", version });
             }
         }
